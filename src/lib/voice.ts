@@ -220,6 +220,112 @@ export function langToBcp47(lang: Lang): string {
   return 'en-IN';
 }
 
+const TE_ONES = [
+  '', 'ఒకటి', 'రెండు', 'మూడు', 'నాలుగు', 'ఐదు', 'ఆరు', 'ఏడు', 'ఎనిమిది', 'తొమ్మిది',
+];
+const TE_TEENS = [
+  'పది', 'పదకొండు', 'పన్నెండు', 'పదమూడు', 'పద్నాలుగు',
+  'పదిహేను', 'పదహారు', 'పదిహేడు', 'పద్దెనిమిది', 'పంతొమ్మిది',
+];
+const TE_TENS = [
+  '', '', 'ఇరవై', 'ముప్పై', 'నలభై', 'యాభై', 'అరవై', 'డెబ్బై', 'ఎనభై', 'తొంభై',
+];
+
+function under100Te(n: number, beforeNoun = false): string {
+  if (n === 0) return '';
+  if (n === 1) return beforeNoun ? 'ఒక' : 'ఒకటి';
+  if (n < 10) return TE_ONES[n];
+  if (n < 20) return TE_TEENS[n - 10];
+  const t = Math.floor(n / 10);
+  const u = n % 10;
+  return u === 0 ? TE_TENS[t] : `${TE_TENS[t]} ${TE_ONES[u]}`;
+}
+
+function under1000Te(n: number, beforeNoun = false): string {
+  if (n < 100) return under100Te(n, beforeNoun);
+  const h = Math.floor(n / 100);
+  const rem = n % 100;
+  if (h === 1) {
+    return rem === 0 ? 'వంద' : `నూట ${under100Te(rem, false)}`;
+  }
+  return rem === 0
+    ? `${TE_ONES[h]} ${beforeNoun ? 'వందల' : 'వందలు'}`
+    : `${TE_ONES[h]} వందల ${under100Te(rem, false)}`;
+}
+
+function intToTeluguWords(n: number, beforeNoun = false): string {
+  if (n === 0) return 'సున్నా';
+  if (n < 1000) return under1000Te(n, beforeNoun);
+
+  if (n < 100000) {
+    const k = Math.floor(n / 1000);
+    const rem = n % 1000;
+    if (k === 1) {
+      return rem === 0 ? 'వెయ్యి' : `వెయ్యి ${under1000Te(rem, beforeNoun)}`;
+    }
+    const kWords = under100Te(k, false);
+    return rem === 0
+      ? `${kWords} ${beforeNoun ? 'వేల' : 'వేలు'}`
+      : `${kWords} వేల ${under1000Te(rem, beforeNoun)}`;
+  }
+
+  if (n < 10000000) {
+    const lakh = Math.floor(n / 100000);
+    const rem = n % 100000;
+    if (lakh === 1) {
+      return rem === 0 ? 'లక్ష' : `లక్ష ${intToTeluguWords(rem, beforeNoun)}`;
+    }
+    const lWords = under100Te(lakh, false);
+    return rem === 0
+      ? `${lWords} ${beforeNoun ? 'లక్షల' : 'లక్షలు'}`
+      : `${lWords} లక్షల ${intToTeluguWords(rem, beforeNoun)}`;
+  }
+
+  const cr = Math.floor(n / 10000000);
+  const rem = n % 10000000;
+  if (cr === 1) {
+    return rem === 0 ? 'కోటి' : `కోటి ${intToTeluguWords(rem, beforeNoun)}`;
+  }
+  const cWords = intToTeluguWords(cr, false);
+  return rem === 0
+    ? `${cWords} ${beforeNoun ? 'కోట్ల' : 'కోట్లు'}`
+    : `${cWords} కోట్ల ${intToTeluguWords(rem, beforeNoun)}`;
+}
+
+export function numberToTeluguWords(numStr: string, beforeNoun = false): string {
+  const clean = numStr.replace(/,/g, '').trim();
+  const neg = clean.startsWith('-');
+  const unsigned = neg ? clean.slice(1) : clean;
+  const [intPart, decPart] = unsigned.split('.');
+  const intVal = Number.parseInt(intPart || '0', 10);
+  if (Number.isNaN(intVal)) return numStr;
+
+  let words = intToTeluguWords(intVal, !decPart && beforeNoun);
+  if (decPart) {
+    const decWords = decPart
+      .split('')
+      .map((d) => TE_ONES[Number(d)] || 'సున్నా')
+      .join(' ');
+    words = `${words} పాయింట్ ${decWords}`;
+  }
+  return neg ? `మైనస్ ${words}` : words;
+}
+
+function isTeluguChar(code: number): boolean {
+  return (code >= 0x0c00 && code <= 0x0c7f) || code === 0x200c || code === 0x200d;
+}
+
+function nasalDevanagariForNext(next: number): string {
+  // Velar stops: ం works cleanly in Hindi TTS; retroflex/dental/labial need explicit
+  // homorganic nasal consonants so Hindi TTS doesn't nasalize the preceding vowel.
+  if (next >= 0x0c15 && next <= 0x0c19) return '\u0902';
+  if (next >= 0x0c1a && next <= 0x0c1e) return 'न्';
+  if (next >= 0x0c1f && next <= 0x0c23) return 'ण्';
+  if (next >= 0x0c24 && next <= 0x0c28) return 'न्';
+  if (next >= 0x0c2a && next <= 0x0c2e) return 'म्';
+  return 'म्';
+}
+
 // Transliterate Telugu script to Devanagari so browsers without a native Telugu TTS voice
 // (such as Desktop Chrome on Windows, which ships `hi-IN` but not `te-IN`) can still
 // pronounce Telugu words phonetically instead of remaining silent.
@@ -233,9 +339,7 @@ export function teluguToDevanagari(text: string): string {
     if (code === 0x0c01) {
       out += '\u0901';
     } else if (code === 0x0c02) {
-      const next = text.charCodeAt(i + 1);
-      const nextIsStop = next >= 0x0c15 && next <= 0x0c2e;
-      out += nextIsStop ? '\u0902' : 'म्';
+      out += nasalDevanagariForNext(text.charCodeAt(i + 1));
     } else if (code === 0x0c03) {
       out += '\u0903';
     } else if (code >= 0x0c05 && code <= 0x0c0b) {
@@ -251,14 +355,23 @@ export function teluguToDevanagari(text: string): string {
     } else if (
       (code >= 0x0c15 && code <= 0x0c28) ||
       (code >= 0x0c2a && code <= 0x0c30) ||
-      (code >= 0x0c35 && code <= 0x0c39) ||
-      (code >= 0x0c3e && code <= 0x0c44)
+      (code >= 0x0c35 && code <= 0x0c39)
     ) {
       out += String.fromCharCode(code - 0x0300);
+      // Telugu consonants without an explicit virama or matra at the end of a word retain
+      // a spoken `-a` vowel; Hindi deletes word-final schwas, so preserve it with `ा`.
+      const next = text.charCodeAt(i + 1);
+      if (!isTeluguChar(next)) {
+        out += 'ा';
+      }
     } else if (code === 0x0c31) {
       out += 'र';
+      if (!isTeluguChar(text.charCodeAt(i + 1))) out += 'ा';
     } else if (code === 0x0c32 || code === 0x0c33 || code === 0x0c34) {
       out += 'ल';
+      if (!isTeluguChar(text.charCodeAt(i + 1))) out += 'ा';
+    } else if (code >= 0x0c3e && code <= 0x0c44) {
+      out += String.fromCharCode(code - 0x0300);
     } else if (code === 0x0c46 || code === 0x0c47) {
       out += 'े';
     } else if (code === 0x0c48) {
@@ -339,9 +452,38 @@ export function teluguToLatin(text: string): string {
 }
 
 function prepareTextForSpeech(text: string, lang: Lang): string {
-  const rupeeWord = lang === 'te' ? 'రూపాయలు' : lang === 'hi' ? 'रुपये' : 'rupees';
-  const kmWord = lang === 'te' ? 'కిలోమీటర్లు' : lang === 'hi' ? 'किलोमीटर' : 'kilometers';
-  const pctWord = lang === 'te' ? 'శాతం' : lang === 'hi' ? 'प्रतिशत' : 'percent';
+  if (lang === 'te') {
+    return text
+      .replace(/(\d),(?=\d)/g, '$1')
+      .replace(/([A-Za-z])([\u0C00-\u0C7F])/g, '$1 $2')
+      .replace(/(-?)₹\s*(\d+(?:\.\d+)?)/g, (_, sign: string, num: string) =>
+        `${numberToTeluguWords(`${sign}${num}`, true)} రూపాయలు`
+      )
+      .replace(/(-?\d+(?:\.\d+)?)\s*%/g, (_, num: string) =>
+        `${numberToTeluguWords(num, true)} శాతం`
+      )
+      .replace(/(\d+(?:\.\d+)?)\s*km\b/gi, (_, num: string) =>
+        `${numberToTeluguWords(num, true)} కిలోమీటర్లు`
+      )
+      .replace(/(-?\d+(?:\.\d+)?)/g, (match, _g1, offset: number, full: string) => {
+        const after = full.slice(offset + match.length);
+        const beforeNoun = /^\s+[\u0C00-\u0C7FA-Za-z]/.test(after);
+        return numberToTeluguWords(match, beforeNoun);
+      })
+      .replace(/[()]/g, ', ')
+      .replace(/:\s*/g, ', ')
+      .replace(/\s*—\s*/g, ', ')
+      .replace(/\n+/g, '. ')
+      .replace(/[.,]\s*\./g, '.')
+      .replace(/,\s*,+/g, ',')
+      .replace(/,\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const rupeeWord = lang === 'hi' ? 'रुपये' : 'rupees';
+  const kmWord = lang === 'hi' ? 'किलोमीटर' : 'kilometers';
+  const pctWord = lang === 'hi' ? 'प्रतिशत' : 'percent';
 
   return text
     // Strip Indian grouping commas inside numbers so TTS reads e.g. 100000 cleanly
@@ -383,23 +525,39 @@ function splitSpeechChunks(text: string, maxLen = 160): string[] {
   return chunks.length > 0 ? chunks : [text];
 }
 
-export async function ensureVoicesLoaded(timeoutMs = 700): Promise<SpeechSynthesisVoice[]> {
+let voicesWaitCompleted = false;
+
+export async function ensureVoicesLoaded(
+  preferredLang?: Lang,
+  timeoutMs = 800
+): Promise<SpeechSynthesisVoice[]> {
   if (!('speechSynthesis' in window)) return [];
   const synth = window.speechSynthesis;
   const initial = synth.getVoices();
-  if (initial.length > 0) return initial;
+  const hasPreferred = preferredLang ? findVoiceForLang(initial, preferredLang) !== null : initial.length > 0;
+  const hasRemoteVoices = initial.some((v) => !v.localService);
+
+  // Edge/Chrome often return only local OS voices initially before cloud/natural voices populate.
+  if (initial.length > 0 && (hasPreferred || hasRemoteVoices || voicesWaitCompleted)) {
+    return initial;
+  }
 
   return new Promise((resolve) => {
     let settled = false;
     const finish = () => {
       if (settled) return;
       settled = true;
+      voicesWaitCompleted = true;
       synth.removeEventListener?.('voiceschanged', onVoices);
       clearTimeout(timer);
       resolve(synth.getVoices());
     };
     const onVoices = () => {
-      if (synth.getVoices().length > 0) finish();
+      const current = synth.getVoices();
+      if (current.length === 0) return;
+      if (!preferredLang || findVoiceForLang(current, preferredLang) !== null || current.some((v) => !v.localService)) {
+        finish();
+      }
     };
     synth.addEventListener?.('voiceschanged', onVoices);
     const timer = setTimeout(finish, timeoutMs);
@@ -488,7 +646,7 @@ export function speak(
   }
 
   const startPlayback = async () => {
-    const voices = await ensureVoicesLoaded();
+    const voices = await ensureVoicesLoaded(lang);
     if (token !== activeSpeakToken) return;
 
     const nativeVoice = findVoiceForLang(voices, lang);
@@ -541,7 +699,7 @@ export function speak(
       if (chosenVoice) {
         utter.voice = chosenVoice;
       }
-      utter.rate = lang === 'te' ? 0.92 : 0.95;
+      utter.rate = lang === 'te' ? (usedFallbackVoice ? 0.98 : 0.94) : 0.95;
 
       let chunkDone = false;
       const onChunkFinished = (hadError: boolean) => {
